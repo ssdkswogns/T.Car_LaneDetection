@@ -446,7 +446,7 @@ class LaneDataset(Dataset):
             for j in range(len(x_2d) - 1):
                 seg_label = cv2.line(seg_label,
                                      (int(x_2d[j]), int(y_2d[j])), (int(x_2d[j+1]), int(y_2d[j+1])),
-                                     color=np.asscalar(np.array([1])),
+                                     color = np.array([1]).item(),
                                      thickness=thickness)
                 seg_idx_label[i] = cv2.line(
                     seg_idx_label[i],
