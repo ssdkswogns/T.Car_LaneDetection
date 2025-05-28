@@ -25,7 +25,7 @@ from .ddp import *
 import os.path as osp
 from .gpu_utils import gpu_available
 from mmcv.runner.optimizer import build_optimizer
-
+import pickle
 
 class Runner:
     def __init__(self, args):
@@ -379,6 +379,17 @@ class Runner:
 
                     json_line["pred_laneLines"] = lanelines_pred
                     json_line["pred_laneLines_prob"] = lanelines_prob
+
+                    prediction_save = False
+                    if prediction_save:
+                        #TODO : change this directory
+                        ROOT_DIR  = Path(__file__).resolve().parent
+                        save_dir  = ROOT_DIR / "pred_json"
+                        save_dir.mkdir(parents=True, exist_ok=True)   # 폴더 없으면 자동 생성
+                        os.makedirs(save_dir, exist_ok=True)
+                        output_path = os.path.join(save_dir, f"prediction_loader_{i}_{j}.pickle")
+                        with open(output_path, 'wb') as f:
+                            pickle.dump(json_line, f)
 
                     pred_lines_sub.append(copy.deepcopy(json_line))
                     img_path = json_line['file_path']
