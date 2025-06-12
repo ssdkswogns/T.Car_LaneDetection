@@ -35,7 +35,10 @@ from scipy.special import softmax
 import logging, datetime
 
 from experiments.gpu_utils import is_main_process
-from mmdet.utils import get_root_logger as get_mmdet_root_logger
+from mmengine.logging import MMLogger
+
+def get_mmdet_root_logger(log_file=None, log_level='INFO'):
+    return MMLogger.get_instance(name='mmdet', log_file=log_file, log_level=log_level)
 
 
 def create_logger(args):

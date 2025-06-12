@@ -204,7 +204,7 @@ class SparseInsDecoder(nn.Module):
             output.update(dict(
                 pred_masks=pred_masks))
         
-        if self.training:
+        if is_training:
             sparse_inst_losses, matched_indices = self.loss(
                     output,
                     lane_idx_map=kwargs.get('lane_idx_map'),

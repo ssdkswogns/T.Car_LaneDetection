@@ -2,13 +2,15 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from utils.utils import *
-from mmdet3d.models import build_backbone, build_neck
+# from mmdet3d.models import build_backbone, build_neck
+from mmdet.models import *
+from mmdet.registry import MODELS
 from .latr_head import LATRHead
-from mmcv.utils import Config
+from mmengine.config import Config
 from .ms2one import build_ms2one
 from .utils import deepFeatureExtractor_EfficientNet
 
-from mmdet.models.builder import BACKBONES
+# from mmdet.models.builder import BACKBONES
 
 
 # overall network
@@ -26,9 +28,9 @@ class LATR(nn.Module):
         num_group = args.latr_cfg.num_group
         sparse_num_group = args.latr_cfg.sparse_num_group
 
-        self.encoder = build_backbone(args.latr_cfg.encoder)
+        self.encoder = MODELS.build(args.latr_cfg.encoder)
         if getattr(args.latr_cfg, 'neck', None):
-            self.neck = build_neck(args.latr_cfg.neck)
+            self.neck = MODELS.build(args.latr_cfg.neck)
         else:
             self.neck = None
         self.encoder.init_weights()
@@ -58,9 +60,12 @@ class LATR(nn.Module):
         )
 
     def forward(self, image, _M_inv=None, is_training=True, extra_dict=None):
+        # if torch.isnan(image).any() or torch.isinf(image).any():
+        #     print("⚠️ Image tensor contains NaN or Inf!")
+        #     exit()
         out_featList = self.encoder(image)
-        neck_out = self.neck(out_featList)
-        neck_out = self.ms2one(neck_out)
+        first_neck_out = self.neck(out_featList)
+        neck_out = self.ms2one(first_neck_out)
 
         output = self.head(
             dict(
@@ -75,4 +80,27 @@ class LATR(nn.Module):
             ),
             is_training=is_training,
         )
-        return output
+
+        # output['out_featList'] = out_featList  # encoder output 전체 리스트
+        # output['first_neck_out'] = first_neck_out         # neck 결과
+        # output['neck_out'] = neck_out
+
+        # return output
+
+        return {
+            "all_cls_scores": output["all_cls_scores"],
+            "all_line_preds": output["all_line_preds"]
+        }
+    
+class LATRBackboneOnly(nn.Module):
+    def __init__(self, latr_model: LATR):
+        super().__init__()
+        self.encoder = latr_model.encoder
+        self.neck = latr_model.neck
+        self.ms2one = latr_model.ms2one
+
+    def forward(self, image):
+        out_featList = self.encoder(image)
+        first_neck_out = self.neck(out_featList)
+        neck_out = self.ms2one(first_neck_out)
+        return neck_out

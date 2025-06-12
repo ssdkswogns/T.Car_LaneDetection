@@ -12,7 +12,7 @@ import shutil
 
 from data.Load_Data import *
 from data.apollo_dataset import ApolloLaneDataset
-from models.latr import LATR
+from models.latr import LATR, LATRBackboneOnly
 from experiments.gpu_utils import is_main_process
 from utils import eval_3D_lane, eval_3D_once
 from utils import eval_3D_lane_apollo
@@ -24,7 +24,8 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 from .ddp import *
 import os.path as osp
 from .gpu_utils import gpu_available
-from mmcv.runner.optimizer import build_optimizer
+# from mmcv.runner.optimizer import build_optimizer
+from mmdet.registry import OPTIMIZERS
 
 
 class Runner:
@@ -37,8 +38,9 @@ class Runner:
         if is_main_process():
             if not gpu_available():
                 raise Exception("No gpu available for usage")
-            if int(os.getenv('WORLD_SIZE', 1)) >= 1:
-                self.logger.info("Let's use %s" % os.environ['WORLD_SIZE'] + "GPUs!")
+            world_size = os.environ.get('WORLD_SIZE', '1')
+            if int(world_size) >= 1:
+                self.logger.info(f"Let's use {world_size} GPU(s)!")
                 torch.cuda.empty_cache()
         
         # Get Dataset
@@ -353,7 +355,7 @@ class Runner:
                         lanelines_pred = []
                         lanelines_prob = []
                         xs = pos_lanes[:, 0:args.num_y_steps]
-                        ys = np.tile(args.anchor_y_steps.copy()[None, :], (xs.shape[0], 1))
+                        ys = np.tile(np.array(args.anchor_y_steps).copy()[None, :], (xs.shape[0], 1))
                         zs = pos_lanes[:, args.num_y_steps:2*args.num_y_steps]
                         vis = pos_lanes[:, 2*args.num_y_steps:]
 
@@ -404,10 +406,12 @@ class Runner:
                 assert False
                 
             if any(name in args.dataset_name for name in ['openlane', 'apollo']):
-                gather_output = [None for _ in range(args.world_size)]
-                # all_gather all eval_stats and calculate mean
-                dist.all_gather_object(gather_output, eval_stats)
-                dist.barrier()
+                if dist.is_initialized():
+                    gather_output = [None for _ in range(dist.get_world_size())]
+                    dist.all_gather_object(gather_output, eval_stats)
+                    dist.barrier()
+                else:
+                    gather_output = [eval_stats]
                 eval_stats = self._recal_gpus_val(gather_output, eval_stats)
 
                 loss_list = []
@@ -518,10 +522,71 @@ class Runner:
         model = self._get_model_from_cfg()
         self._load_ckpt_from_workdir(model)
 
-        dist.barrier()
+        if dist.is_available() and dist.is_initialized():
+            dist.barrier()
         # DDP setting
         if args.distributed:
             model = DDP(model, device_ids=[args.local_rank], output_device=args.local_rank, find_unused_parameters=True)
+        
+        # === ONNX EXPORT BLOCK ===
+        if getattr(args, 'export_onnx', False):
+
+            export_model = LATRBackboneOnly(model).eval().cuda()
+
+            dataset = LaneDataset(args.dataset_dir, args.data_dir + 'validation/', args, data_aug=False)
+            loader, sampler = get_loader(dataset, args)
+
+            for i, sample_input in enumerate(loader):
+                print(sample_input['image'].shape)
+                print(sample_input['seg_idx_label'].shape)
+                print(sample_input['seg_label'].shape)
+                print(sample_input['lidar2img'].shape)
+                print(sample_input['pad_shape'].shape)
+                # torch.save(sample_input, 'batch.pt', weights_only=False)
+                # exit()
+
+                # model = convert_syncbn_to_bn(model)
+                model.eval()
+                wrapper = ONNXWrapper(model)
+
+                device = torch.device('cuda')
+
+                # if sample_input['image'].dim() == 3:
+                #     sample_input['image'] = sample_input['image'].unsqueeze(0)
+
+                for k, v in sample_input.items():
+                    if isinstance(v, np.ndarray):
+                        sample_input[k] = torch.from_numpy(v)
+                    if isinstance(v, torch.Tensor):
+                        sample_input[k] = v.to(device)
+
+                with torch.no_grad():
+                    sample_output = model(image=sample_input['image'], extra_dict=sample_input, is_training=False)
+                    print(sample_output["all_cls_scores"].shape)
+                    print(sample_output["all_line_preds"].shape)
+
+                    torch.onnx.export(
+                        wrapper,
+                        sample_input['image'],
+                        f"{args.save_path}/model_0609_2.onnx",
+                        opset_version = 17,
+                        input_names = ["image"],
+                        output_names = ["all_cls_scores", "all_line_preds"],
+                        # output_names = ["neck_out"],
+                        # dynamic_axes = {
+                        #     'image': {0: 'batch'},
+                        #     'seg_idx_label': {0: 'batch'},
+                        #     'seg_label': {0: 'batch'},
+                        #     'lidar2img': {0: 'batch'},
+                        #     'pad_shape': {0: 'batch'},
+                        #     'all_cls_scores': {1: 'batch'},
+                        #     'all_line_preds': {1: 'batch'}
+                        # }
+                    )
+
+                self.logger.info(f"ONNX 모델이 저장되었습니다: {args.save_path}/model_export.onnx")
+                return
+        
         _, eval_stats = self.validate(model)
 
         if is_main_process() and (eval_stats is not None):
@@ -576,9 +641,10 @@ class Runner:
             )
 
         # Define optimizer and scheduler
-        optimizer = build_optimizer(
-            model,
-            args.optimizer_cfg)
+        # optimizer = build_optimizer(
+        #     model,
+        #     args.optimizer_cfg)
+        optimizer = OPTIMIZERS.build(dict(model=model, **args.optimizer_cfg))
         scheduler = define_scheduler(
             optimizer, args, dataset_size=len(self.train_loader))
 
@@ -620,6 +686,7 @@ class Runner:
 
     def _get_valid_dataset(self):
         args = self.args
+        
         if 'openlane' in args.dataset_name:
             if not args.evaluate_case:
                 valid_dataset = LaneDataset(args.dataset_dir, args.data_dir + 'validation/', args)
@@ -710,7 +777,6 @@ class Runner:
                                                             eval_stats[4], eval_stats[5],
                                                             eval_stats[6]))
 
-
 def set_work_dir(cfg):
     # =========output path========== #
     save_prefix = osp.join(os.getcwd(), 'work_dirs')
@@ -733,4 +799,43 @@ def set_work_dir(cfg):
 
     # cp config into cur_work_dir
     shutil.copy(cfg_path.as_posix(), cfg.save_path)
-    
+
+
+def convert_syncbn_to_bn(module):
+    module_output = module
+    if isinstance(module, nn.SyncBatchNorm):
+        module_output = nn.BatchNorm2d(
+            module.num_features,
+            module.eps,
+            module.momentum,
+            module.affine,
+            module.track_running_stats
+        )
+        with torch.no_grad():
+            module_output.weight = module.weight
+            module_output.bias = module.bias
+            module_output.running_mean = module.running_mean
+            module_output.running_var = module.running_var
+    for name, child in module.named_children():
+        module_output.add_module(name, convert_syncbn_to_bn(child))
+    return module_output
+
+
+batch = torch.load('batch.pt')
+
+class ONNXWrapper(torch.nn.Module):
+    def __init__(self, model):
+        super().__init__()
+        self.model = model
+
+    def forward(self, image):
+        extra_dict = {
+            "seg_idx_label": batch["seg_idx_label"].cuda(),
+            "seg_label": batch["seg_label"].cuda(),
+            "lidar2img": batch["lidar2img"].cuda(),
+            "pad_shape": batch["pad_shape"].cuda(),
+            "ground_lanes": None,
+            "ground_lanes_dense": None,
+        }
+
+        return self.model(image=image, extra_dict=extra_dict, is_training=False)

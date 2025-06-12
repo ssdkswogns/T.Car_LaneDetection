@@ -9,7 +9,7 @@ import warnings
 import numpy as np
 import cv2
 from PIL import Image
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import Dataset, DataLoader, DistributedSampler, RandomSampler
 from torchvision import transforms
 import torchvision.transforms.functional as F
 from torchvision.transforms import InterpolationMode
@@ -68,7 +68,7 @@ class LaneDataset(Dataset):
         self.w_net = args.resize_w
         self.u_ratio = float(self.w_net) / float(self.w_org)
         self.v_ratio = float(self.h_net) / float(self.h_org - self.h_crop)
-        self.top_view_region = args.top_view_region
+        self.top_view_region = np.array(args.top_view_region) # due to fixed config file
         self.max_lanes = args.max_lanes
 
         self.K = args.K
@@ -464,9 +464,11 @@ class LaneDataset(Dataset):
         extra_dict['pad_shape'] = torch.Tensor(seg_idx_label.shape[-2:]).float()
         extra_dict['idx_json_file'] = idx_json_file
         extra_dict['image'] = image
+
         if self.data_aug:
             aug_mat = torch.from_numpy(aug_mat.astype(np.float32))
             extra_dict['aug_mat'] = aug_mat
+
         return extra_dict
 
     # old getitem, workable
@@ -549,7 +551,10 @@ def get_loader(transformed_dataset, args):
         if is_main_process():
             print('use distributed sampler')
         if 'standard' in args.dataset_name or 'rare_subset' in args.dataset_name or 'illus_chg' in args.dataset_name:
-            data_sampler = torch.utils.data.distributed.DistributedSampler(transformed_dataset, shuffle=True, drop_last=True)
+            if args.distributed:
+                data_sampler = DistributedSampler(transformed_dataset)
+            else:
+                data_sampler = RandomSampler(transformed_dataset)
             data_loader = DataLoader(transformed_dataset,
                                         batch_size=args.batch_size, 
                                         sampler=data_sampler,
@@ -560,7 +565,10 @@ def get_loader(transformed_dataset, args):
                                         generator=g,
                                         drop_last=True)
         else:
-            data_sampler = torch.utils.data.distributed.DistributedSampler(transformed_dataset)
+            if args.distributed:
+                data_sampler = DistributedSampler(transformed_dataset)
+            else:
+                data_sampler = RandomSampler(transformed_dataset)
             data_loader = DataLoader(transformed_dataset,
                                         batch_size=args.batch_size, 
                                         sampler=data_sampler,

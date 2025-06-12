@@ -9,16 +9,17 @@ import torch.nn.functional as F
 
 from fvcore.nn.weight_init import c2_msra_fill, c2_xavier_fill
 
-from mmdet.models.utils.builder import TRANSFORMER
+from mmengine.registry import MODELS
+# from mmdet.models.utils.builder import TRANSFORMER
 from mmcv.cnn.bricks.transformer import FFN, build_positional_encoding
-from mmcv.cnn import (build_activation_layer, build_conv_layer,
-                      build_norm_layer, xavier_init, constant_init)
-from mmcv.runner.base_module import BaseModule
+from mmcv.cnn import build_activation_layer, build_conv_layer, build_norm_layer
+# from mmcv.runner.base_module import BaseModule
+from mmengine.model import BaseModule
 from mmcv.cnn.bricks.transformer import (BaseTransformerLayer,
                                          TransformerLayerSequence,
                                          build_transformer_layer_sequence)
-from mmcv.cnn.bricks.registry import (ATTENTION,TRANSFORMER_LAYER,
-                                      TRANSFORMER_LAYER_SEQUENCE)
+# from mmcv.cnn.bricks.registry import (ATTENTION,TRANSFORMER_LAYER,
+#                                       TRANSFORMER_LAYER_SEQUENCE)
 from mmcv.ops.multi_scale_deform_attn import MultiScaleDeformableAttnFunction
 
 from .scatter_utils import scatter_mean
@@ -101,7 +102,7 @@ def ground2img(coords3d, H, W, lidar2img, ori_shape, mask=None, return_img_pts=F
     return canvas
 
 
-@ATTENTION.register_module()
+@MODELS.register_module()
 class MSDeformableAttention3D(BaseModule):
     def __init__(self,
                  embed_dims=256,
@@ -128,6 +129,8 @@ class MSDeformableAttention3D(BaseModule):
 
         self.num_query = num_query
         self.num_anchor_per_query = num_anchor_per_query
+        if not isinstance(anchor_y_steps, np.ndarray):
+            anchor_y_steps = np.array(anchor_y_steps)
         self.register_buffer('anchor_y_steps',
             torch.from_numpy(anchor_y_steps).float())
         self.num_points_per_anchor = len(anchor_y_steps) // num_anchor_per_query
@@ -164,7 +167,10 @@ class MSDeformableAttention3D(BaseModule):
 
     def init_weights(self):
         """Default initialization for Parameters of Module."""
-        constant_init(self.sampling_offsets, 0.)
+        # constant_init(self.sampling_offsets, 0.)
+        init.constant_(self.sampling_offsets.weight, 0.0)
+        if hasattr(self.sampling_offsets, 'bias') and self.sampling_offsets.bias is not None:
+            init.constant_(self.sampling_offsets.bias, 0.0)
         thetas = torch.arange(
             self.num_heads,
             dtype=torch.float32) * (2.0 * math.pi / self.num_heads)
@@ -177,9 +183,21 @@ class MSDeformableAttention3D(BaseModule):
             grid_init[..., i, :] *= i + 1
 
         self.sampling_offsets.bias.data = grid_init.view(-1)
-        constant_init(self.attention_weights, val=0., bias=0.)
-        xavier_init(self.value_proj, distribution='uniform', bias=0.)
-        xavier_init(self.output_proj, distribution='uniform', bias=0.)
+        # constant_init(self.attention_weights, val=0., bias=0.)
+        init.constant_(self.attention_weights.weight, 0.0)
+        if hasattr(self.attention_weights, 'bias') and self.attention_weights.bias is not None:
+            init.constant_(self.attention_weights.bias, 0.0)
+
+        # xavier_init(self.value_proj, distribution='uniform', bias=0.)
+        init.xavier_uniform_(self.value_proj.weight)
+        if hasattr(self.value_proj, 'bias') and self.value_proj.bias is not None:
+            init.constant_(self.value_proj.bias, 0.0)
+
+        # xavier_init(self.output_proj, distribution='uniform', bias=0.)
+        if self.output_proj is not None:
+            init.xavier_uniform_(self.output_proj.weight)
+            if hasattr(self.output_proj, 'bias') and self.output_proj.bias is not None:
+                init.constant_(self.output_proj.bias, 0.0)
         self._is_init = True
 
     def ref_to_lidar(self, reference_points, pc_range, not_y=True):
@@ -307,7 +325,7 @@ class MSDeformableAttention3D(BaseModule):
         return output
 
 
-@TRANSFORMER_LAYER.register_module()
+@MODELS.register_module()
 class LATRDecoderLayer(BaseTransformerLayer):
     def __init__(self,
                  attn_cfgs,
@@ -346,7 +364,7 @@ class LATRDecoderLayer(BaseTransformerLayer):
         return query
 
 
-@TRANSFORMER_LAYER_SEQUENCE.register_module()
+@MODELS.register_module()
 class LATRTransformerDecoder(TransformerLayerSequence):
     def __init__(self,
                  *args, embed_dims=None,
@@ -397,7 +415,10 @@ class LATRTransformerDecoder(TransformerLayerSequence):
     def init_weights(self):
         super().init_weights()
         for l in self.gflat_pred_layer:
-            xavier_init(l, gain=0.01)
+            if hasattr(l, 'weight') and l.weight is not None:
+                init.xavier_uniform_(l.weight, gain=0.01)
+            if hasattr(l, 'bias') and l.bias is not None:
+                init.constant_(l.bias, 0.0)
 
     def pred2M(self, pitch_z):
         pitch_z = pitch_z / self.M_decay_ratio
@@ -437,7 +458,7 @@ class LATRTransformerDecoder(TransformerLayerSequence):
         zmax = z_region[1]
         init_ref_3d = generate_ref_pt(
             xmin, ymin, xmax, ymax, init_z,
-            bev_w, bev_h, query.device)
+            bev_w, bev_h, query.device) # + torch.rand(1, device=query.device) * 0 # 동적 연산으로 변경경
         init_ref_3d = init_ref_3d[None, ...].repeat(batch_size, 1, 1, 1)
         ref_3d_homo = F.pad(init_ref_3d, (0, 1), value=1)
         init_ref_3d_homo = ref_3d_homo.clone()
@@ -448,6 +469,7 @@ class LATRTransformerDecoder(TransformerLayerSequence):
         project_results = []
         outputs_classes = []
         outputs_coords = []
+
         for layer_idx, layer in enumerate(self.layers):
             coords_img = ground2img(
                 ref_3d_homo, *img_feats[0].shape[-2:],
@@ -461,8 +483,9 @@ class LATRTransformerDecoder(TransformerLayerSequence):
             ground_coords[:, 0, ...] = (ground_coords[:, 0, ...] - xmin) / (xmax - xmin)
             ground_coords[:, 1, ...] = (ground_coords[:, 1, ...] - ymin) / (ymax - ymin)
             ground_coords[:, 2, ...] = (ground_coords[:, 2, ...] - zmin) / (zmax - zmin)
-            ground_coords = inverse_sigmoid(ground_coords)
+            ground_coords = inverse_sigmoid(ground_coords) # .detach()
             key_pos = self.position_encoder(ground_coords)
+            # key_pos = key_pos + 0 * query.mean()
 
             query = layer(query, key=key, value=value,
                           key_pos=(key_pos + sin_embed
@@ -506,6 +529,11 @@ class LATRTransformerDecoder(TransformerLayerSequence):
 
             cls_feat = query.view(bs, self.num_query, self.num_anchor_per_query, -1)
             cls_feat = torch.max(cls_feat, dim=2)[0]
+            # cls_feat = torch.max(
+            #     query.view(bs, self.num_query, self.num_anchor_per_query, -1),
+            #     dim=2
+            # )[0]
+            # cls_feat = cls_feat + 0. * img_feats[0][:, 0, 0, 0]
             outputs_class = cls_branches[layer_idx](cls_feat)
 
             outputs_classes.append(outputs_class)
@@ -521,7 +549,7 @@ class LATRTransformerDecoder(TransformerLayerSequence):
         return torch.stack(intermediate), project_results, outputs_classes, outputs_coords
 
 
-@TRANSFORMER.register_module()
+@MODELS.register_module()
 class LATRTransformer(BaseModule):
     def __init__(self, encoder=None, decoder=None, init_cfg=None):
         super(LATRTransformer, self).__init__(init_cfg=init_cfg)
@@ -536,8 +564,10 @@ class LATRTransformer(BaseModule):
     def init_weights(self):
         # follow the official DETR to init parameters
         for m in self.modules():
-            if hasattr(m, 'weight') and m.weight.dim() > 1:
-                xavier_init(m, distribution='uniform')
+            if hasattr(m, 'weight') and m.weight is not None and m.weight.dim() > 1:
+                init.xavier_uniform_(m.weight)
+            if hasattr(m, 'bias') and m.bias is not None:
+                init.constant_(m.bias, 0.0)
         self._is_init = True
 
     @staticmethod

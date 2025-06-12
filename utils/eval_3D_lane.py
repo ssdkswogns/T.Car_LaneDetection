@@ -45,10 +45,10 @@ class LaneEval(object):
         self.dataset_name = args.dataset_name
         self.dataset_dir = args.dataset_dir
 
-        self.x_min = args.top_view_region[0, 0]
-        self.x_max = args.top_view_region[1, 0]
-        self.y_min = args.top_view_region[2, 1]
-        self.y_max = args.top_view_region[0, 1]
+        self.x_min = np.array(args.top_view_region)[0, 0]
+        self.x_max = np.array(args.top_view_region)[1, 0]
+        self.y_min = np.array(args.top_view_region)[2, 1]
+        self.y_max = np.array(args.top_view_region)[0, 1]
         self.y_samples = np.linspace(self.y_min, self.y_max, num=100, endpoint=False)
         self.dist_th = 1.5
         self.ratio_th = 0.75

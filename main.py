@@ -1,5 +1,5 @@
 import argparse
-from mmcv.utils import Config, DictAction
+from mmengine.config import Config, DictAction
 
 from utils.utils import *
 from experiments.ddp import *
@@ -15,6 +15,8 @@ def get_args():
     parser.add_argument('--world_size', type=int, default=1)
     parser.add_argument('--nodes', type=int, default=1)
     parser.add_argument('--use_slurm', default=False, action='store_true')
+
+    parser.add_argument('--export_onnx', action='store_true', help='Export model to ONNX format')
 
     # exp setting
     parser.add_argument('--config', type=str, help='config file path')
@@ -34,7 +36,8 @@ def main():
         cfg.merge_from_dict(args.cfg_options)
 
     # initialize distributed data parallel set
-    ddp_init(args)
+    if args.distributed:
+        ddp_init(args)
     cfg.merge_from_dict(vars(args))
     
     runner = Runner(cfg)
@@ -42,7 +45,6 @@ def main():
         runner.train()
     else:
         runner.eval()
-
 
 if __name__ == '__main__':
     main()
