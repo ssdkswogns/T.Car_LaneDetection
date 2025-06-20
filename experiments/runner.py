@@ -568,7 +568,8 @@ class Runner:
                     torch.onnx.export(
                         wrapper,
                         sample_input['image'],
-                        f"{args.save_path}/model_0609_2.onnx",
+                        f"{args.save_path}/model_0620.onnx",
+                        custom_opsets={"mmdeploy": 1},
                         opset_version = 17,
                         input_names = ["image"],
                         output_names = ["all_cls_scores", "all_line_preds"],

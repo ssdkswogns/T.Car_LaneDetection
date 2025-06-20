@@ -3,13 +3,19 @@ import pycuda.driver as cuda
 import pycuda.autoinit
 import ctypes
 
-onnx_file = "./tensorrt/model_0609_partial.onnx"
-engine_file = "./tensorrt/model_0609_partial.engine"
+onnx_file = "./tensorrt/model_0620.onnx"
+engine_file = "./tensorrt/model_0620.engine"
 plugin_path = "/home/t/mmdeploy/build/lib/libmmdeploy_tensorrt_ops.so"
 
 ctypes.CDLL(plugin_path)
+ctypes.CDLL("/usr/lib/aarch64-linux-gnu/libnvinfer_plugin.so", ctypes.RTLD_GLOBAL)
+ctypes.CDLL("/usr/lib/aarch64-linux-gnu/libnvonnxparser.so", ctypes.RTLD_GLOBAL)
+# ctypes.CDLL("libnvinfer_ops.so", ctypes.RTLD_GLOBAL)
 
+# ONNX to TensorRT
 TRT_LOGGER = trt.Logger(trt.Logger.VERBOSE)
+trt.init_libnvinfer_plugins(TRT_LOGGER, "")
+
 builder = trt.Builder(TRT_LOGGER)
 network = builder.create_network(1 << int(trt.NetworkDefinitionCreationFlag.EXPLICIT_BATCH))
 parser = trt.OnnxParser(network, TRT_LOGGER)
@@ -28,7 +34,7 @@ if -1 in input_tensor.shape:
 
 config = builder.create_builder_config()
 config.max_workspace_size = 8192 * (1 << 20)  # 8GB for Jetson
-config.set_flag(trt.BuilderFlag.FP16)
+# config.set_flag(trt.BuilderFlag.FP16) # FP16 conversion
 # config.set_flag(trt.BuilderFlag.DISABLE_TIMING_CACHE)
 
 print("🔧 Building engine...")

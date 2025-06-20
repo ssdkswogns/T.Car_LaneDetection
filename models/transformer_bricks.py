@@ -458,7 +458,7 @@ class LATRTransformerDecoder(TransformerLayerSequence):
         zmax = z_region[1]
         init_ref_3d = generate_ref_pt(
             xmin, ymin, xmax, ymax, init_z,
-            bev_w, bev_h, query.device) # + torch.rand(1, device=query.device) * 0 # 동적 연산으로 변경경
+            bev_w, bev_h, query.device) # BEV 상의 grid 좌표를 기반으로 3D reference point를 생성성
         init_ref_3d = init_ref_3d[None, ...].repeat(batch_size, 1, 1, 1)
         ref_3d_homo = F.pad(init_ref_3d, (0, 1), value=1)
         init_ref_3d_homo = ref_3d_homo.clone()
@@ -473,7 +473,7 @@ class LATRTransformerDecoder(TransformerLayerSequence):
         for layer_idx, layer in enumerate(self.layers):
             coords_img = ground2img(
                 ref_3d_homo, *img_feats[0].shape[-2:],
-                lidar2img, pad_shape)
+                lidar2img, pad_shape) # 각 reference point를 카메라 좌표계에 투영영
             if layer_idx > 0:
                 project_results.append(coords_img.clone())
             coords_img_key_pos = coords_img.clone()
@@ -484,7 +484,7 @@ class LATRTransformerDecoder(TransformerLayerSequence):
             ground_coords[:, 1, ...] = (ground_coords[:, 1, ...] - ymin) / (ymax - ymin)
             ground_coords[:, 2, ...] = (ground_coords[:, 2, ...] - zmin) / (zmax - zmin)
             ground_coords = inverse_sigmoid(ground_coords) # .detach()
-            key_pos = self.position_encoder(ground_coords)
+            key_pos = self.position_encoder(ground_coords) # Positional embedding
             # key_pos = key_pos + 0 * query.mean()
 
             query = layer(query, key=key, value=value,
@@ -495,12 +495,16 @@ class LATRTransformerDecoder(TransformerLayerSequence):
                           pad_shape=pad_shape,
                           lidar2img=lidar2img,
                           query_pos=query_pos,
-                          **kwargs)
+                          **kwargs) # Transformer layer (Query: BEV, Key / Value: Img feature)
+            # 결과는 다음 layer의 query로 사용
 
             # update M
             if layer_idx < len(self.layers) - 1:
                 input_feat = torch.cat([img_feats[0], coords_img], dim=1)
-                M = M.detach() @ self.pred2M(self.gflat_pred_layer(input_feat).squeeze(-1).squeeze(-1))
+                x = self.gflat_pred_layer(input_feat)
+                x = x.view(x.shape[0], -1, 1)
+                # M = M.detach() @ self.pred2M(self.gflat_pred_layer(input_feat).squeeze(-1).squeeze(-1))
+                M = M.detach() @ self.pred2M(x)
                 ref_3d_homo = (init_ref_3d_homo.flatten(1, 2) @ M.permute(0, 2, 1)
                               ).view(*ref_3d_homo.shape)
 
@@ -527,8 +531,10 @@ class LATRTransformerDecoder(TransformerLayerSequence):
             ], dim=-1)
             reference_points = new_reference_points.sigmoid()
 
-            cls_feat = query.view(bs, self.num_query, self.num_anchor_per_query, -1)
-            cls_feat = torch.max(cls_feat, dim=2)[0]
+            # [num_query × num_anchor_per_query, batch, embed_dim] -> [batch, num_query, num_anchor_per_query, embed_dim]
+            cls_feat = query.view(bs, self.num_query, self.num_anchor_per_query, -1) 
+            # cls_feat = torch.max(cls_feat, dim=2)[0]
+            cls_feat = torch.amax(query.view(bs, self.num_query, self.num_anchor_per_query, -1), dim=2) # TensorRT를 위한 수정
             # cls_feat = torch.max(
             #     query.view(bs, self.num_query, self.num_anchor_per_query, -1),
             #     dim=2

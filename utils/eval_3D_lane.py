@@ -448,7 +448,6 @@ class LaneEval(object):
             else:
                 pred_lanes = [pred_lanes[ii] for ii in range(len(pred_lanes_prob)) if max(pred_lanes_prob[ii]) > prob_th]
                 pred_lanes_prob = [prob for k, prob in enumerate(pred_lanes_prob) if max(prob) > prob_th]
-
                 if pred_lanes_prob:
                     pred_category = np.argmax(pred_lanes_prob, 1)
                 else:
