@@ -1,7 +1,8 @@
 <br />
 <p align="center">
   
-  <h3 align="center"><strong>Optimized version of LATR using Tensor RT (LATR: 3D Lane Detection from Monocular Images with Transformer)</strong></h3>
+  <h3 align="center"><strong>Optimized version of LATR using Tensor RT</strong></h3>
+  <h2 align="center"><strong>(LATR: 3D Lane Detection from Monocular Images with Transformer)</strong></h2>
   
 </p>
 
