@@ -13,7 +13,9 @@ std = [0.229, 0.224, 0.225]
 dataset = '1000'
 dataset_dir = './data/openlane/images/'
 data_dir = './data/openlane/lane3d_1000/'
+inference_dataset_dir = './data/TCAR/images/'
 
+# Train should be batch_size 8
 batch_size = 8
 nworkers = 10
 num_category = 21

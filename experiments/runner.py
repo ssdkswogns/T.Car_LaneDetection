@@ -311,33 +311,40 @@ class Runner:
 
                 # Write results
                 for j in range(num_el):
-                    json_file = json_files[j]
-                    if cam_extrinsics_all is not None:
-                        extrinsic = cam_extrinsics_all[j].cpu().numpy()
-                        intrinsic = cam_intrinsics_all[j].cpu().numpy()
+                    if not args.evaluate_case: # training or validation case
+                        json_file = json_files[j]
+                        if cam_extrinsics_all is not None:
+                            extrinsic = cam_extrinsics_all[j].cpu().numpy()
+                            intrinsic = cam_intrinsics_all[j].cpu().numpy()
 
-                    with open(json_file, 'r') as file:
-                        if 'apollo' in args.dataset_name:
-                            json_line = json.loads(file.read())
-                            if 'extrinsic' not in json_line:
-                                json_line['extrinsic'] = extrinsic
-                            if 'intrinsic' not in json_line:
-                                json_line['intrinsic'] = intrinsic
-                        else:
-                            file_lines = [line for line in file]
-                            json_line = json.loads(file_lines[0])
+                        with open(json_file, 'r') as file:
+                            if 'apollo' in args.dataset_name:
+                                json_line = json.loads(file.read())
+                                if 'extrinsic' not in json_line:
+                                    json_line['extrinsic'] = extrinsic
+                                if 'intrinsic' not in json_line:
+                                    json_line['intrinsic'] = intrinsic
+                            else:
+                                file_lines = [line for line in file]
+                                json_line = json.loads(file_lines[0])
 
-                    json_line['json_file'] = json_file
-                    if 'once' in args.dataset_name:
-                        if 'train' in json_file:
-                            img_path = json_file.replace('train', 'data').replace('.json', '.jpg')
-                        elif 'val' in json_file:
-                            img_path = json_file.replace('val', 'data').replace('.json', '.jpg')
-                        elif 'test' in json_file:
-                            img_path = json_file.replace('test', 'data').replace('.json', '.jpg')
-                        json_line["file_path"] = img_path
+                        json_line['json_file'] = json_file
+                        if 'once' in args.dataset_name:
+                            if 'train' in json_file:
+                                img_path = json_file.replace('train', 'data').replace('.json', '.jpg')
+                            elif 'val' in json_file:
+                                img_path = json_file.replace('val', 'data').replace('.json', '.jpg')
+                            elif 'test' in json_file:
+                                img_path = json_file.replace('test', 'data').replace('.json', '.jpg')
+                            json_line["file_path"] = img_path
 
-                    gt_lines_sub.append(copy.deepcopy(json_line))
+                        gt_lines_sub.append(copy.deepcopy(json_line))
+                    else: # inference case
+                        json_line = dict()
+                        if cam_extrinsics_all is not None:
+                            json_line['extrinsic'] = cam_extrinsics_all
+                            json_line['intrinsic'] = cam_intrinsics_all
+                            json_line['file_path'] = json_files
 
                     # pred in ground
                     lane_pred = all_line_preds[j].cpu().numpy()
@@ -370,31 +377,40 @@ class Runner:
                             for tmp_inner_idx in range(cur_xs.shape[0]):
                                 lanelines_pred[-1].append(
                                     [cur_xs[tmp_inner_idx],
-                                     cur_ys[tmp_inner_idx],
-                                     cur_zs[tmp_inner_idx]])
+                                    cur_ys[tmp_inner_idx],
+                                    cur_zs[tmp_inner_idx]])
                             lanelines_prob.append(scores_pred[tmp_idx].tolist())
                     else:
                         lanelines_pred = []
                         lanelines_prob = []
 
+                            
                     json_line["pred_laneLines"] = lanelines_pred
                     json_line["pred_laneLines_prob"] = lanelines_prob
-
-                    prediction_save = False
-                    if prediction_save:
-                        #TODO : change this directory
-                        ROOT_DIR  = Path(__file__).resolve().parent
-                        save_dir  = ROOT_DIR / "pred_json"
-                        save_dir.mkdir(parents=True, exist_ok=True)   # 폴더 없으면 자동 생성
-                        os.makedirs(save_dir, exist_ok=True)
-                        output_path = os.path.join(save_dir, f"prediction_loader_{i}_{j}.pickle")
-                        with open(output_path, 'wb') as f:
-                            pickle.dump(json_line, f)
-
                     pred_lines_sub.append(copy.deepcopy(json_line))
-                    img_path = json_line['file_path']
-                    
+                    prediction_save = True
+
+                    if prediction_save:
+                        ROOT_DIR  = Path(__file__).resolve().parent
+                        if not args.evaluate_case: # training or validation case
+                            #TODO : change this directory
+                            
+                            save_dir  = ROOT_DIR / "openlane_pred_json"
+                            os.makedirs(save_dir, exist_ok=True)
+                            output_path = os.path.join(save_dir, f"prediction_{i}_{j}.pickle")
+                            with open(output_path, 'wb') as f:
+                                pickle.dump(json_line, f)
+
+                        else:
+                            save_dir = ROOT_DIR / "TCAR_pred_json"
+                            os.makedirs(save_dir, exist_ok=True)
+                            # 파일 경로 # only batch sise 1
+                            output_path = os.path.join(save_dir, f"pred_{i}.pickle")
+                            with open(output_path, 'wb') as f:
+                                pickle.dump(json_line, f)
+
                     if args.dataset_name == 'once':
+                        img_path = json_line['file_path']
                         self.save_eval_result_once(args, img_path, lanelines_pred, lanelines_prob)
             val_pbar.close()
 
@@ -636,7 +652,8 @@ class Runner:
                 valid_dataset = LaneDataset(args.dataset_dir, args.data_dir + 'validation/', args)
             else:
                 # TODO eval case
-                valid_dataset = LaneDataset(args.dataset_dir, args.data_dir + 'test/up_down_case/', args)
+                inference_dataset_dir = '/data/TCAR/images/'
+                valid_dataset = LaneDataset(inference_dataset_dir, args.data_dir, args, inference=True)
 
         elif 'once' in args.dataset_name:
             valid_dataset = LaneDataset(args.dataset_dir, ops.join(args.data_dir, 'val/'), args)

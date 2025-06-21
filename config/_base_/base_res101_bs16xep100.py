@@ -88,7 +88,8 @@ nodes = 1
 eval_ckpt = ''
 resume_from = ''
 output_dir = 'openlane'
-evaluate_case = ''
+# evaluate_case = ''
+evaluate_case = 'TCAR'
 eval_freq = 8 # eval freq during training
 
 save_json_path = None

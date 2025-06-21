@@ -36,7 +36,7 @@ class LaneDataset(Dataset):
         It is assumed the dataset provides accurate visibility labels. Preparing ground-truth tensor depends on it.
     """
     # dataset_base_dir is image path, json_file_path is json file path,
-    def __init__(self, dataset_base_dir, json_file_path, args, data_aug=False):
+    def __init__(self, dataset_base_dir, json_file_path, args, data_aug=False, inference=False):
         """
 
         :param dataset_info_file: json file list
@@ -62,6 +62,7 @@ class LaneDataset(Dataset):
         self.h_org = args.org_h
         self.w_org = args.org_w
         self.h_crop = args.crop_y
+        self.inference = inference
 
         # parameters related to service network
         self.h_net = args.resize_h
@@ -101,7 +102,7 @@ class LaneDataset(Dataset):
         self.save_json_path = args.save_json_path
 
         # parse ground-truth file
-        if 'openlane' in self.dataset_name:
+        if 'openlane' in self.dataset_name and self.inference==False:
             label_list = glob.glob(json_file_path + '**/*.json', recursive=True)
             self._label_list = label_list
         elif 'once' in self.dataset_name:
@@ -114,6 +115,13 @@ class LaneDataset(Dataset):
                 if not os.path.exists(image_path):
                     continue
                 self._label_list.append(js_label_file)
+
+        elif inference:
+            image_list = sorted(
+                glob.glob(os.path.join(self.dataset_base_dir, '*.jpg')),
+                key=lambda p: int(os.path.splitext(os.path.basename(p))[0])  # 000001, 000002 …
+            )
+            self._label_list = image_list
         else: 
             raise ValueError("to use ApolloDataset for apollo")
         
@@ -443,6 +451,8 @@ class LaneDataset(Dataset):
             x_2d, y_2d = projective_transformation(M, lane[:, 0],
                                                    lane[:, 1], lane[:, 2])
             gt_laneline_img[i] = np.array([x_2d, y_2d]).T.tolist()
+            # if not hasattr(np, 'asscalar'):
+            #     np.asscalar = lambda x: x.item() if hasattr(x, 'item') else x
             for j in range(len(x_2d) - 1):
                 seg_label = cv2.line(seg_label,
                                      (int(x_2d[j]), int(y_2d[j])), (int(x_2d[j+1]), int(y_2d[j+1])),
@@ -474,7 +484,122 @@ class LaneDataset(Dataset):
         """
         Args: idx (int): Index in list to load image
         """
+
+        if self.inference:
+            extra_dict = {}
+            # idx_json_file = self._label_list[idx]
+            cam_intrinsics, cam_extrinsics = self.get_calibration_matrix()    # [[1,0,0,0], …]
+
+            extra_dict['cam_extrinsics'] = cam_extrinsics
+            extra_dict['cam_intrinsics'] = cam_intrinsics
+
+            # Re-calculate extrinsic matrix based on ground coordinate
+            R_vg = np.array([[0, 1, 0],
+                                [-1, 0, 0],
+                                [0, 0, 1]], dtype=float)
+            R_gc = np.array([[1, 0, 0],
+                                [0, 0, 1],
+                                [0, -1, 0]], dtype=float)
+            cam_extrinsics[:3, :3] = np.matmul(np.matmul(
+                                        np.matmul(np.linalg.inv(R_vg), cam_extrinsics[:3, :3]),
+                                            R_vg), R_gc)
+            cam_extrinsics[0:2, 3] = 0.0
+        
+            gt_cam_height = cam_extrinsics[2, 3]
+            gt_cam_pitch = 0
+            
+            if not self.fix_cam: # this should be 
+                intrinsics = cam_intrinsics
+                extrinsics = cam_extrinsics
+
+            else:
+                gt_cam_height = self.cam_height
+                gt_cam_pitch = self.cam_pitch
+                # should not be used
+                intrinsics = self.K
+                extrinsics = np.zeros((3,4))
+                extrinsics[2,3] = gt_cam_height
+
+            img_path = self._label_list[idx]
+            image = Image.open(img_path).convert("RGB")
+            
+            image = F.crop(image, self.h_crop, 0, self.h_org-self.h_crop, self.w_org)
+            image = F.resize(image, size=(self.h_net, self.w_net), interpolation=InterpolationMode.BILINEAR)
+            image = self.totensor(image).float()
+            image = self.normalize(image)
+            intrinsics = torch.from_numpy(intrinsics)
+            extrinsics = torch.from_numpy(extrinsics)
+
+            H_g2im, P_g2im, H_crop = self.transform_mats_impl(cam_extrinsics, \
+                                    cam_intrinsics, gt_cam_pitch, gt_cam_height)
+            M = np.matmul(H_crop, P_g2im)
+            lidar2img = np.eye(4).astype(np.float32)
+            lidar2img[:3] = M
+
+            seg_label = np.zeros((self.h_net, self.w_net), dtype=np.int8)
+            seg_idx_label = np.zeros((self.max_lanes, self.h_net, self.w_net), dtype=np.uint8)
+            ground_lanes = np.zeros((self.max_lanes, self.anchor_dim), dtype=np.float32)
+            ground_lanes_dense = np.zeros(
+            (self.max_lanes, self.num_y_steps_dense * 3), dtype=np.float32)
+
+            seg_label = torch.from_numpy(seg_label.astype(np.float32))
+            seg_label.unsqueeze_(0)
+            
+            extra_dict['seg_label'] = seg_label
+            extra_dict['seg_idx_label'] = seg_idx_label
+            extra_dict['ground_lanes'] = ground_lanes 
+            extra_dict['ground_lanes_dense'] = ground_lanes_dense
+            extra_dict['lidar2img'] = lidar2img
+            extra_dict['pad_shape'] = torch.Tensor(seg_idx_label.shape[-2:]).float()
+            extra_dict['idx_json_file'] = img_path
+            extra_dict['image'] = image
+            return extra_dict
+        
         return self.WIP__getitem__(idx)
+
+    def get_calibration_matrix(self):
+
+        #TCAR
+        cam_intrinsics = np.array(
+            [[1.77922829e+03, 0.00000000e+00, 9.65097172e+02],
+            [0.00000000e+00, 1.77765524e+03, 5.44333116e+02],
+            [0.00000000e+00, 0.00000000e+00, 1.00000000e+00],]
+        )
+        cam_extrinsics = np.array(
+            [[-5.461434770672567e-05, -9.977968682532519e-01, -6.443525072870476e-03,1.262659832769987531e-01],
+            [-5.397257670589571e-02,  7.371525844529945e-03, -1.000443410762757e+00,1.76314293701543942],
+            [ 9.666810449623151e-01, -4.356957483891831e-03,  1.171246625042949e-01,-1.940665342576016201],
+            [0.0,0.0,0.0,1.0]]
+        )
+
+        R_cam2ego = cam_extrinsics[:3, :3]
+        t_cam2ego = cam_extrinsics[:3, 3]
+        R_ego2cam_old = R_cam2ego.T
+        t_ego2cam_old = -R_ego2cam_old @ t_cam2ego
+        T_ego2cam_old = np.eye(4, dtype=np.float64)
+        T_ego2cam_old[:3, :3] = R_ego2cam_old
+        T_ego2cam_old[:3, 3] = t_ego2cam_old
+
+        R_reaxis = np.array(
+            [[ 0, 1, 0],   # x_new ← y_old (front)
+            [-1, 0, 0],   # y_new ← -x_old (left)
+            [ 0, 0, 1]],  # z remains up
+            dtype=np.float64
+        )
+        T_reaxis = np.eye(4, dtype=np.float64)
+        T_reaxis[:3, :3] = R_reaxis
+        cam_extrinsics = T_reaxis @ T_ego2cam_old
+
+        # Openlane
+        cam_extrinsics = np.array([[0.9999558812277093, -4.412690247759514e-05, -0.009393276900625495, 1.5442298691351966], 
+                                    [6.784166429129727e-05, 0.9999968115246617, 0.0025243490286893143, -0.024168247502349863], 
+                                    [0.009393135558690344, -0.002524874913047423, 0.9999526958866851, 2.1160897275662878], 
+                                    [0.0, 0.0, 0.0, 1.0]])
+        cam_intrinsics = np.array([[2079.511010136365, 0.0, 953.9357583878485], 
+                                    [0.0, 2079.511010136365, 661.581335767017], 
+                                    [0.0, 0.0, 1.0]])
+
+        return cam_intrinsics, cam_extrinsics
 
     def transform_mats_impl(self, cam_extrinsics, cam_intrinsics, cam_pitch, cam_height):
         if not self.fix_cam:
@@ -535,6 +660,11 @@ def get_loader(transformed_dataset, args):
 
     g = torch.Generator()
     g.manual_seed(0)
+    
+    shuffle_eval = True
+    if args.evaluate_case:
+       args.batch_size = 1
+       shuffle_eval = False 
 
     discarded_sample_start = len(sample_idx) // args.batch_size * args.batch_size
     if is_main_process():
@@ -549,7 +679,7 @@ def get_loader(transformed_dataset, args):
         if is_main_process():
             print('use distributed sampler')
         if 'standard' in args.dataset_name or 'rare_subset' in args.dataset_name or 'illus_chg' in args.dataset_name:
-            data_sampler = torch.utils.data.distributed.DistributedSampler(transformed_dataset, shuffle=True, drop_last=True)
+            data_sampler = torch.utils.data.distributed.DistributedSampler(transformed_dataset, shuffle=shuffle_eval, drop_last=True)
             data_loader = DataLoader(transformed_dataset,
                                         batch_size=args.batch_size, 
                                         sampler=data_sampler,
@@ -560,7 +690,7 @@ def get_loader(transformed_dataset, args):
                                         generator=g,
                                         drop_last=True)
         else:
-            data_sampler = torch.utils.data.distributed.DistributedSampler(transformed_dataset)
+            data_sampler = torch.utils.data.distributed.DistributedSampler(transformed_dataset, shuffle=shuffle_eval, drop_last=True)
             data_loader = DataLoader(transformed_dataset,
                                         batch_size=args.batch_size, 
                                         sampler=data_sampler,
