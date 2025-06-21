@@ -15,7 +15,6 @@ dataset_dir = './data/openlane/images/'
 data_dir = './data/openlane/lane3d_1000/'
 inference_dataset_dir = './data/TCAR/images/'
 
-# Train should be batch_size 8
 batch_size = 8
 nworkers = 10
 num_category = 21
