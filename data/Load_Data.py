@@ -699,7 +699,8 @@ def get_loader(transformed_dataset, args):
             #     data_sampler = DistributedSampler(transformed_dataset)
             # else:
             #     data_sampler = RandomSampler(transformed_dataset)
-                
+            print("Sequential sampler for openlane dataset")
+
             data_sampler = SequentialSampler(sample_idx)   # 순차 Sampler
             data_loader = DataLoader(transformed_dataset,
                                         batch_size=args.batch_size, 

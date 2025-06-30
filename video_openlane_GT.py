@@ -20,9 +20,13 @@ IMG_ROOT     = "/data/openlane/images"        # file_path가 상대경로일 경
 GT_ROOT      = "/data/openlane/lane3d_1000"   # 이미지 상대 경로와 동일 구조
 
 # 3-D 축 범위 [min, max] (단위: m)
-X_RANGE = (-15, 15)
-Y_RANGE = (0, 30)
-Z_RANGE = (-15, 15)
+X_RANGE = (0, 30)
+Y_RANGE = (-20, 20)
+Z_RANGE = (-10, 10)
+
+X_RANGE_PRED = Y_RANGE
+Y_RANGE_PRED = X_RANGE
+Z_RANGE_PRED = Z_RANGE
 # ──────────────────────────────────────────
 
 import os
@@ -160,7 +164,46 @@ def render_3d(lanes_xyz, cats, size):
     """
     fig = plt.figure(figsize=(size[0]/100, size[1]/100), dpi=100)
     ax  = fig.add_subplot(111, projection='3d')
-    # ax.grid(False)
+    ax.grid(False)
+    # ax.set_axis_off()
+
+    for lane, c in zip(lanes_xyz, cats):
+        if lane.size == 0:
+            continue
+        ax.plot(lane[:,0], lane[:,1], lane[:,2],
+                lw=2, color=COL_3D.get(c, (0.5,0.5,0.5)))
+    ax.scatter(0, 0, 0, c='r', s=130)
+
+    ax.set_xlim(X_RANGE_PRED)
+    ax.set_ylim(Y_RANGE_PRED)
+    ax.set_zlim(Z_RANGE_PRED)
+
+    ax.set_box_aspect((X_RANGE_PRED[1]-X_RANGE_PRED[0],
+                       Y_RANGE_PRED[1]-Y_RANGE_PRED[0],
+                       Z_RANGE_PRED[1]-Z_RANGE_PRED[0]))
+    ax.dist = 0   # 원하는 카메라 거리 (기본값은 Matplotlib 버전마다 다릅니다)
+
+    fig.tight_layout(pad=0)
+    
+    ax.view_init(30, 270)
+    fig.canvas.draw()
+    w, h = fig.canvas.get_width_height()
+    buf = np.frombuffer(fig.canvas.tostring_rgb(), dtype=np.uint8).reshape(h, w, 3)
+    plt.close(fig)
+    return cv2.cvtColor(buf, cv2.COLOR_RGB2BGR)
+
+
+
+def render_3d_GT(lanes_xyz, cats, size):
+    """
+    3D 차선을 Matplotlib로 렌더링해 BGR 이미지 반환.
+    lanes_xyz: List of (N_i,3) 점
+    cats     : List of category IDs
+    size     : (width, height) 출력 픽셀 크기
+    """
+    fig = plt.figure(figsize=(size[0]/100, size[1]/100), dpi=100)
+    ax  = fig.add_subplot(111, projection='3d')
+    ax.grid(False)
     # ax.set_axis_off()
 
     for lane, c in zip(lanes_xyz, cats):
@@ -177,15 +220,16 @@ def render_3d(lanes_xyz, cats, size):
     ax.set_box_aspect((X_RANGE[1]-X_RANGE[0],
                        Y_RANGE[1]-Y_RANGE[0],
                        Z_RANGE[1]-Z_RANGE[0]))
-    ax.dist = 10   # 원하는 카메라 거리 (기본값은 Matplotlib 버전마다 다릅니다)
+    ax.dist = 0   # 원하는 카메라 거리 (기본값은 Matplotlib 버전마다 다릅니다)
+    
+    fig.tight_layout(pad=0)
 
-    ax.view_init(30, 140)
+    ax.view_init(30, 180)
     fig.canvas.draw()
     w, h = fig.canvas.get_width_height()
     buf = np.frombuffer(fig.canvas.tostring_rgb(), dtype=np.uint8).reshape(h, w, 3)
     plt.close(fig)
     return cv2.cvtColor(buf, cv2.COLOR_RGB2BGR)
-
 
 
 def ts_key(p):
@@ -206,7 +250,7 @@ def main():
 
     writer = None
     first = True
-    scale_3d = 0.5  # 3D 패널 너비 비율
+    scale_3d = 0.7  # 3D 패널 너비 비율
 
     for pkl in pkls:
         pred = pickle.load(open(pkl,'rb'))
@@ -247,7 +291,7 @@ def main():
 
         uv_gt    = project_xyz_to_image_3D(lanes_xyz_gt, ext_gt, intr_gt)
         img2d_gt = overlay_2d(img.copy(), uv_gt, cats_gt)
-        img3d_gt = render_3d(lanes_xyz_gt, cats_gt, (w, h))
+        img3d_gt = render_3d_GT(lanes_xyz_gt, cats_gt, (w, h))
         img3d_gt = cv2.resize(img3d_gt, (int(w*scale_3d), h))
 
         # ─ 2×2 Grid 조합 ─
