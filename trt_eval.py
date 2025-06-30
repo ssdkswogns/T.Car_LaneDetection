@@ -20,6 +20,7 @@ from utils import eval_3D_lane, eval_3D_once
 from utils import eval_3D_lane_apollo
 
 from models.latr import LATR
+import pickle
 
 prev_cls = None
 
@@ -238,6 +239,25 @@ def trt_eval_loop(
                 json_line["pred_laneLines"] = lanelines_pred
                 json_line["pred_laneLines_prob"] = lanelines_prob
                 pred_lines_sub.append(copy.deepcopy(json_line))
+                
+                if args.save_pred:
+                    ROOT_DIR  = Path(__file__).resolve().parent
+                    if not args.evaluate_case: # training or validation case
+                        #TODO : change this directory
+                        
+                        save_dir  = ROOT_DIR / "openlane_pred_json_trt"
+                        os.makedirs(save_dir, exist_ok=True)
+                        output_path = os.path.join(save_dir, f"Opred_{i}_{j}.pickle")
+                        with open(output_path, 'wb') as f:
+                            pickle.dump(json_line, f)
+
+                    else:
+                        save_dir = ROOT_DIR / "TCAR_pred_json"
+                        os.makedirs(save_dir, exist_ok=True)
+                        # 파일 경로 # only batch sise 1
+                        output_path = os.path.join(save_dir, f"Tpred_{i}.pickle")
+                        with open(output_path, 'wb') as f:
+                            pickle.dump(json_line, f)
 
     # --- 평가 호출
     if 'openlane' in args.dataset_name:
@@ -298,6 +318,7 @@ def get_args():
     parser.add_argument('--world_size', type=int, default=1)
     parser.add_argument('--nodes', type=int, default=1)
     parser.add_argument('--use_slurm', default=False, action='store_true')
+    parser.add_argument('--save_pred', default=False, action='store_true')
 
     parser.add_argument('--export_onnx', action='store_true', help='Export model to ONNX format')
 

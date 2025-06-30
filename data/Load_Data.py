@@ -17,6 +17,7 @@ from utils.utils import *
 from experiments.gpu_utils import is_main_process
 
 from .transform import PhotoMetricDistortionMultiViewImage
+from torch.utils.data import SequentialSampler   # 추가
 
 sys.path.append('./')
 warnings.simplefilter('ignore', np.RankWarning)
@@ -662,12 +663,11 @@ def get_loader(transformed_dataset, args):
 
     g = torch.Generator()
     g.manual_seed(0)
-    
-    shuffle_eval = True
+    shuffle_eval = False
     if args.evaluate_case:
        args.batch_size = 1
        shuffle_eval = False 
-
+    print("Batch size", args.batch_size)
     discarded_sample_start = len(sample_idx) // args.batch_size * args.batch_size
     if is_main_process():
         print("Discarding images:")
@@ -695,10 +695,12 @@ def get_loader(transformed_dataset, args):
                                         generator=g,
                                         drop_last=True)
         else:
-            if args.distributed:
-                data_sampler = DistributedSampler(transformed_dataset)
-            else:
-                data_sampler = RandomSampler(transformed_dataset)
+            # if args.distributed:
+            #     data_sampler = DistributedSampler(transformed_dataset)
+            # else:
+            #     data_sampler = RandomSampler(transformed_dataset)
+                
+            data_sampler = SequentialSampler(sample_idx)   # 순차 Sampler
             data_loader = DataLoader(transformed_dataset,
                                         batch_size=args.batch_size, 
                                         sampler=data_sampler,

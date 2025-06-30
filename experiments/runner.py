@@ -390,16 +390,15 @@ class Runner:
                     json_line["pred_laneLines"] = lanelines_pred
                     json_line["pred_laneLines_prob"] = lanelines_prob
                     pred_lines_sub.append(copy.deepcopy(json_line))
-                    prediction_save = True
 
-                    if prediction_save:
+                    if args.save_pred:
                         ROOT_DIR  = Path(__file__).resolve().parent
                         if not args.evaluate_case: # training or validation case
                             #TODO : change this directory
                             
                             save_dir  = ROOT_DIR / "openlane_pred_json"
                             os.makedirs(save_dir, exist_ok=True)
-                            output_path = os.path.join(save_dir, f"prediction_{i}_{j}.pickle")
+                            output_path = os.path.join(save_dir, f"Opred_{i}_{j}.pickle")
                             with open(output_path, 'wb') as f:
                                 pickle.dump(json_line, f)
 
@@ -407,7 +406,7 @@ class Runner:
                             save_dir = ROOT_DIR / "TCAR_pred_json"
                             os.makedirs(save_dir, exist_ok=True)
                             # 파일 경로 # only batch sise 1
-                            output_path = os.path.join(save_dir, f"pred_{i}.pickle")
+                            output_path = os.path.join(save_dir, f"Tpred_{i}.pickle")
                             with open(output_path, 'wb') as f:
                                 pickle.dump(json_line, f)
 
@@ -850,7 +849,7 @@ def convert_syncbn_to_bn(module):
     return module_output
 
 
-batch = torch.load('batch.pt')
+# batch = torch.load('batch.pt') # for TRT conversion
 
 class ONNXWrapper(torch.nn.Module):
     def __init__(self, model):

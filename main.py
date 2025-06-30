@@ -15,7 +15,7 @@ def get_args():
     parser.add_argument('--world_size', type=int, default=1)
     parser.add_argument('--nodes', type=int, default=1)
     parser.add_argument('--use_slurm', default=False, action='store_true')
-
+    parser.add_argument('--save_pred', default=False, action='store_true')
     parser.add_argument('--export_onnx', action='store_true', help='Export model to ONNX format')
 
     # exp setting
